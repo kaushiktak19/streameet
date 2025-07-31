@@ -1,6 +1,8 @@
 import express from "express"
 import http from "http"
 import { Server, Socket } from "socket.io"
+import { createWorker } from "mediasoup"
+import { Worker, Router, WebRtcTransport, Producer, Consumer, RtpCodecCapability } from "mediasoup/node/lib/types"
 
 const app = express()
 const server = http.createServer()
@@ -31,6 +33,37 @@ const roomState: RoomState = {
     watchers: []
 }
 
+let worker: Worker
+let router: Router
+const transports = new Map<string, WebRtcTransport>()
+const producers = new Map<string, Producer>()
+const consumers = new Map<string, Consumer[]>()
+
+const mediaCodecs: RtpCodecCapability[] = [
+  {
+    kind: "audio",
+    mimeType: "audio/opus",
+    clockRate: 48000,
+    channels: 2,
+    preferredPayloadType: 100
+  },
+  {
+    kind: "video",
+    mimeType: "video/VP8",
+    clockRate: 90000,
+    parameters: {},
+    preferredPayloadType: 101
+  }
+]
+
+async function initMediasoup(){
+    worker = await createWorker()
+    router = await worker.createRouter({ mediaCodecs })
+    console.log("[mediasoup] Worker and Router created")
+}
+
+initMediasoup()
+
 function broadcastRoomState() {
     io.in(Room_Name).emit("room-state-changed", {
         streamers: roomState.streamers.map((s) => s.id),
@@ -38,14 +71,14 @@ function broadcastRoomState() {
     })
 } 
 
-function emitStreamAvailabilty() {
+function emitStreamAvailability() {
     if(roomState.streamers.length > 0){
         io.in(Room_Name).emit("stream-available"),
-        console.log("[stream-available")
+        console.log("[stream-available]")
     }
     else{
         io.in(Room_Name).emit("stream-unavailable"),
-        console.log("[stream-unavailable")
+        console.log("[stream-unavailable]")
     }
 }
 
@@ -73,6 +106,17 @@ function removeUser(id: String): User | null {
     }
 
     return removedUser
+}
+
+async function createWebRtcTransport(): Promise<WebRtcTransport>{
+    const transport = await router.createWebRtcTransport({
+        listenIps: [{ ip: "0.0.0.0",}],
+        enableUdp: true,
+        enableTcp: true,
+        preferUdp: true
+    })
+    
+    return transport
 }
 
 io.on("connection", (socket: Socket) => {
@@ -104,7 +148,7 @@ io.on("connection", (socket: Socket) => {
             }
 
             broadcastRoomState()
-            emitStreamAvailabilty()
+            emitStreamAvailability()
         }
     )
 
@@ -117,7 +161,7 @@ io.on("connection", (socket: Socket) => {
 
             if(removedUser){
                 broadcastRoomState()
-                emitStreamAvailabilty()
+                emitStreamAvailability()
                 console.log(`[leave-room] User removal: ${socket.id}`)
             }
         }   
@@ -136,7 +180,7 @@ io.on("connection", (socket: Socket) => {
 
         if(removedUser){
             broadcastRoomState()
-            emitStreamAvailabilty()
+            emitStreamAvailability()
             console.log(`[disconnect] User removed: ${socket.id}`)
         }
     })
